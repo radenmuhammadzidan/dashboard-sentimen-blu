@@ -100,6 +100,8 @@ td.rl, th.rl {font-size:.72rem; color:#6b7a90; text-align:left; padding-left:4px
 .lg span {display:inline-block; width:70px; height:6px; border-radius:3px;}
 .dn {font-weight:700; font-size:.85rem; color:#1a2333; margin-bottom:2px;}
 .dc {font-size:.78rem; color:#6b7a90; margin-top:6px;}
+.mt-li {font-size:.9rem; color:#e6f0ff; margin-top:8px; line-height:1.5;}
+.mt-ar {font-size:.78rem; color:#b9d0f2; margin-top:10px; line-height:1.45;}
 </style>
 """
 
@@ -295,16 +297,22 @@ with st.container(key="hdr"):
 
 # ---------- Metode Terbaik (statis) ----------
 b_all, c_all, p_all, _, _ = mcnemar(gold)
-kalimat = (f"Unggul pada F1-Score rata-rata makro ({pct(perf.loc[terbaik, 'F1-Score'])} vs "
-           f"{pct(perf.loc[lainnya, 'F1-Score'])}). Selisih accuracy keseluruhan "
-           f"{'signifikan' if p_all < ALPHA else 'tidak signifikan'} (uji McNemar, p = {p_txt(p_all)}).")
 unggul_kelas = {m: [] for m in MODEL}
 for k in URUT:
     uk = mcnemar(gold[gold["aktual"] == k])[3]
     if uk in unggul_kelas:
         unggul_kelas[uk].append(k)
-bagian = [f"{m} unggul pada kelas {', '.join(v)}" for m, v in unggul_kelas.items() if v]
-kalimat2 = ("Per kelas (McNemar): " + "; ".join(bagian) + ".") if bagian else ""
+acc = {m: perf.loc[m, "Accuracy"] for m in MODEL}
+if p_all >= ALPHA:
+    butir1 = (f"Soal ketepatan menebak secara keseluruhan, keduanya hampir sama: Naive Bayes benar {pct(acc['Naive Bayes'])} "
+              f"dan Random Forest {pct(acc['Random Forest'])}. Selisihnya terlalu kecil untuk dianggap sebagai perbedaan nyata (uji McNemar, p = {p_txt(p_all)}).")
+else:
+    lebih = "Naive Bayes" if b_all > c_all else "Random Forest"
+    butir1 = (f"Soal ketepatan menebak secara keseluruhan, {lebih} lebih tepat: Naive Bayes benar {pct(acc['Naive Bayes'])} "
+              f"dan Random Forest {pct(acc['Random Forest'])} (uji McNemar, p = {p_txt(p_all)}).")
+bagian = [f"{m} lebih baik mengenali ulasan {' dan '.join(v)}" for m, v in unggul_kelas.items() if v]
+butir2 = ("Bedanya ada pada jenis ulasan (uji McNemar per kelas): " + ", sedangkan ".join(bagian) + ".") if bagian else \
+         "Tidak ada perbedaan nyata pada tiap jenis ulasan."
 
 with st.container(key="card_metode"):
     st.markdown(
@@ -312,9 +320,16 @@ with st.container(key="card_metode"):
         '<span class="mt-b">Berdasarkan F1-Score makro</span></div>'
         f'<div class="mt-mid"><div class="mt-sp"></div><div class="mt-name">{terbaik}</div>'
         f'<div class="mt-val">{pct(perf.loc[terbaik, "F1-Score"])}<small>F1-Score</small></div></div>'
-        f'<div class="mt-txt">{kalimat}</div><div class="mt-txt2">{kalimat2}</div>'
+        f'<div class="mt-txt">{terbaik} lebih direkomendasikan karena paling seimbang dalam mengenali '
+        'ketiga jenis ulasan: positif, negatif, dan netral.</div>'
+        f'<div class="mt-li">• {butir1}</div><div class="mt-li">• {butir2}</div>'
+        '<div class="mt-ar">F1-Score adalah nilai gabungan yang menilai seberapa adil sebuah metode mengenali ketiga jenis ulasan. '
+        f'Makin tinggi, makin seimbang: {terbaik} {pct(perf.loc[terbaik, "F1-Score"])}, '
+        f'{lainnya} {pct(perf.loc[lainnya, "F1-Score"])}. '
+        'Uji McNemar adalah uji statistik untuk memastikan selisih antar metode bukan sekadar kebetulan.</div>'
         f'<div class="mt-st">Statis · dihitung dari gold set (n = {len(gold)}), tidak berubah oleh filter</div>',
         unsafe_allow_html=True)
+
 
 # ---------- Perbandingan performa + McNemar (statis) ----------
 with st.container(key="card_perf"):
@@ -374,4 +389,4 @@ with c3:
                 st.altair_chart(grafik, theme=None, width="stretch")
                 st.markdown('<div class="dc">' + " · ".join(
                     f"{k.capitalize()} {fmt(int(hit[k]))}" for k in URUT) + "</div>",
-                    unsafe_allow_html=True)
+                    unsafe_allow_html=True) 
