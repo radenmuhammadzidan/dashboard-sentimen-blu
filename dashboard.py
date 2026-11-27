@@ -31,10 +31,13 @@ header[data-testid="stHeader"] {background: transparent;}
 [data-testid="stMarkdownContainer"] th, [data-testid="stMarkdownContainer"] td {border:none !important; background:transparent;}
 
 .st-key-hdr {background: linear-gradient(90deg,#1565d8,#2f86ec); border-radius: 18px; padding: 22px 28px;}
-.st-key-hdr label p, .st-key-hdr [data-testid="stWidgetLabel"] p {color:#fff !important; font-size:.8rem;}
 [class*="st-key-card_"] {background:#fff; border-radius:18px; padding:22px 24px; box-shadow:0 2px 10px rgba(20,40,90,.07);}
 .st-key-card_metode {background:#0b3a7a !important; color:#fff;}
-.st-key-card_cm_nb, .st-key-card_cm_rf, .st-key-card_dist {min-height: 440px;}
+.st-key-card_cm_nb, .st-key-card_cm_rf, .st-key-card_dist {min-height: 600px;}
+.st-key-flt {background: linear-gradient(90deg,#1565d8,#2f86ec); border-radius:14px; padding:14px 16px; margin-bottom:14px;}
+.st-key-flt label p, .st-key-flt [data-testid="stWidgetLabel"] p {color:#fff !important; font-size:.78rem; font-weight:600;}
+.st-key-flt [data-baseweb="tag"] {background:#dce8fb !important;}
+.st-key-flt [data-baseweb="tag"] span {color:#1565d8 !important;}
 
 .hd {display:flex; align-items:center; gap:14px;}
 .logo {background:#fff; color:#1565d8; font-weight:800; border-radius:12px; padding:8px 16px; font-size:1.4rem; letter-spacing:-.02em;}
@@ -280,20 +283,15 @@ kol_terbaik = "pred_rf" if terbaik == "Random Forest" else "pred_nb"
 
 st.markdown(CSS, unsafe_allow_html=True)
 
-# ---------- Header + filter ----------
+# ---------- Header (filter dipindah ke kartu Distribusi sentimen) ----------
 tgl_min, tgl_maks = semua["tanggal"].min(), semua["tanggal"].max()
 daftar_versi = sorted(semua["versi_grup"].unique(), key=urut_versi)
 
 with st.container(key="hdr"):
-    h0, h1, h2, h3 = st.columns([4.2, 1.3, 1.3, 2.2], vertical_alignment="center")
-    h0.markdown('<div class="hd"><div class="logo">blu</div><div>'
+    st.markdown('<div class="hd"><div class="logo">blu</div><div>'
                 '<div class="hd-t">Dashboard Perbandingan Naive Bayes vs Random Forest</div>'
                 '<div class="hd-s">blu by BCA Digital · Analisis sentimen ulasan aplikasi</div>'
                 '</div></div>', unsafe_allow_html=True)
-    tgl_awal = h1.date_input("Dari tanggal", value=tgl_min, min_value=tgl_min, max_value=tgl_maks)
-    tgl_akhir = h2.date_input("Sampai tanggal", value=tgl_maks, min_value=tgl_min, max_value=tgl_maks)
-    versi_pilih = h3.multiselect("Versi aplikasi (major.minor)", daftar_versi,
-                                 placeholder="Semua versi")
 
 # ---------- Metode Terbaik (statis) ----------
 b_all, c_all, p_all, _, _ = mcnemar(gold)
@@ -341,7 +339,7 @@ with st.container(key="card_perf"):
     kiri.markdown(html_perf(perf, terbaik) + html_mc_kelas(gold), unsafe_allow_html=True)
     kanan.markdown(html_mc_total(gold), unsafe_allow_html=True)
 
-# ---------- Confusion matrix (statis) + Distribusi (dinamis) ----------
+# ---------- Confusion matrix (statis) + Distribusi (dinamis, berisi filter) ----------
 c1, c2, c3 = st.columns(3, gap="medium")
 for kolom, model, kol, kunci in ((c1, "Naive Bayes", "pred_nb", "card_cm_nb"),
                                  (c2, "Random Forest", "pred_rf", "card_cm_rf")):
@@ -357,6 +355,12 @@ with c3:
         st.markdown(judul_kartu("Distribusi sentimen",
                                 f"Komposisi ulasan (prediksi {terbaik})", "Dinamis"),
                     unsafe_allow_html=True)
+        with st.container(key="flt"):
+            f1, f2 = st.columns(2)
+            tgl_awal = f1.date_input("Dari tanggal", value=tgl_min, min_value=tgl_min, max_value=tgl_maks)
+            tgl_akhir = f2.date_input("Sampai tanggal", value=tgl_maks, min_value=tgl_min, max_value=tgl_maks)
+            versi_pilih = st.multiselect("Versi aplikasi (major.minor)", daftar_versi,
+                                         placeholder="Semua versi")
         if tgl_awal > tgl_akhir:
             st.warning("Tanggal awal tidak boleh setelah tanggal akhir.")
         else:
@@ -389,4 +393,4 @@ with c3:
                 st.altair_chart(grafik, theme=None, width="stretch")
                 st.markdown('<div class="dc">' + " · ".join(
                     f"{k.capitalize()} {fmt(int(hit[k]))}" for k in URUT) + "</div>",
-                    unsafe_allow_html=True) 
+                    unsafe_allow_html=True)
