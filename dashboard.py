@@ -15,6 +15,7 @@ WARNA_DIST = {"Positif": "#1f9d6b", "Negatif": "#6fa8e8", "Netral": "#f0a020"}
 METRIK = ["Accuracy", "Precision", "Recall", "F1-Score"]
 SINGKAT = {"Naive Bayes": "NB", "Random Forest": "RF"}
 ALPHA = 0.05
+N_MIN = 30   # di bawah ini, hasil dianggap kurang stabil
 
 st.set_page_config(page_title="Dashboard NB vs RF", layout="wide")
 load_dotenv()
@@ -39,6 +40,9 @@ header[data-testid="stHeader"] {background: transparent;}
 .st-key-flt [data-baseweb="tag"] {background:#dce8fb !important;}
 .st-key-flt [data-baseweb="tag"] span {color:#1565d8 !important;}
 
+.fi {background:#fff; border-radius:12px; padding:10px 18px; font-size:.82rem; color:#3b4a60; box-shadow:0 2px 10px rgba(20,40,90,.07); line-height:1.6;}
+.fi b {color:#1565d8;}
+.fw {background:#fff1d6; color:#9a6200; border-radius:12px; padding:9px 18px; font-size:.82rem; font-weight:600; margin-top:8px;}
 .hd {display:flex; align-items:center; gap:14px;}
 .logo {background:#fff; color:#1565d8; font-weight:800; border-radius:12px; padding:8px 16px; font-size:1.4rem; letter-spacing:-.02em;}
 .hd-t {color:#fff; font-size:1.5rem; font-weight:700; line-height:1.2;}
@@ -123,13 +127,18 @@ def get_engine():
 
 @st.cache_data
 def muat_gold():
-    q = """select f.ulasan_id, m.label as aktual, nb.label as pred_nb, rf.label as pred_rf
+    q = """select f.ulasan_id, t.tanggal, v.versi_grup,
+                  m.label as aktual, nb.label as pred_nb, rf.label as pred_rf
            from fact_ulasan f
+           join dim_tanggal t   on f.tanggal_key = t.tanggal_key
+           join dim_versi v     on f.versi_key = v.versi_key
            join dim_sentimen m  on f.sentimen_manual_key = m.sentimen_key
            join dim_sentimen nb on f.sentimen_nb_key = nb.sentimen_key
            join dim_sentimen rf on f.sentimen_rf_key = rf.sentimen_key
            where f.is_gold"""
-    return pd.read_sql(q, get_engine())
+    d = pd.read_sql(q, get_engine())
+    d["tanggal"] = pd.to_datetime(d["tanggal"]).dt.date
+    return d
 
 
 @st.cache_data
@@ -146,9 +155,10 @@ def muat_semua():
     return d
 
 
-def hitung(gold, kol):
+def hitung(gold, kol, labels=URUT):
+    # rata-rata makro hanya atas kelas yang punya data pada gold set (labels)
     p, r, f, _ = precision_recall_fscore_support(
-        gold["aktual"], gold[kol], labels=URUT, average="macro", zero_division=0)
+        gold["aktual"], gold[kol], labels=labels, average="macro", zero_division=0)
     return {"Accuracy": accuracy_score(gold["aktual"], gold[kol]),
             "Precision": p, "Recall": r, "F1-Score": f}
 
@@ -220,7 +230,11 @@ def html_perf(perf, terbaik):
 def html_mc_kelas(gold):
     tabel = "<tr><th>KELAS</th><th>b</th><th>c</th><th>P-VALUE</th><th>UNGGUL</th></tr>"
     for k in URUT:
-        bk, ck, pk, uk, _ = mcnemar(gold[gold["aktual"] == k])
+        sub = gold[gold["aktual"] == k]
+        if sub.empty:
+            tabel += f"<tr><td>{k.capitalize()}</td><td>–</td><td>–</td><td>–</td><td><b>–</b></td></tr>"
+            continue
+        bk, ck, pk, uk, _ = mcnemar(sub)
         u = SINGKAT.get(uk, "–")
         tabel += (f"<tr><td>{k.capitalize()}</td><td>{bk}</td><td>{ck}</td>"
                   f"<td>{p_txt(pk)}</td><td><b>{u}</b></td></tr>")
@@ -275,80 +289,145 @@ def html_cm(gold, kol, model):
 # ---------- data ----------
 gold = muat_gold()
 semua = muat_semua()
-perf = pd.DataFrame({"Naive Bayes": hitung(gold, "pred_nb"),
-                     "Random Forest": hitung(gold, "pred_rf")}).T
+tgl_min, tgl_maks = semua["tanggal"].min(), semua["tanggal"].max()
+daftar_versi = sorted(semua["versi_grup"].unique(), key=urut_versi)
+
+# Nilai filter dibaca dari session_state. Widget-nya ada di kartu "Distribusi sentimen"
+# (paling bawah), tetapi semua kartu di atasnya ikut berubah karena memakai nilai ini.
+tgl_awal = st.session_state.get("f_awal") or tgl_min
+tgl_akhir = st.session_state.get("f_akhir") or tgl_maks
+versi_pilih = st.session_state.get("f_versi") or []
+rentang_ok = tgl_awal <= tgl_akhir
+
+
+def terapkan(df):
+    if not rentang_ok:
+        return df.iloc[0:0]
+    d = df[(df["tanggal"] >= tgl_awal) & (df["tanggal"] <= tgl_akhir)]
+    if versi_pilih:
+        d = d[d["versi_grup"].isin(versi_pilih)]
+    return d
+
+
+gold_f = terapkan(gold)
+semua_f = terapkan(semua)
+ada_gold = len(gold_f) > 0
+kelas_ada = [k for k in URUT if (gold_f["aktual"] == k).any()]
+kelas_hilang = [k for k in URUT if k not in kelas_ada]
+
+if ada_gold:
+    perf = pd.DataFrame({"Naive Bayes": hitung(gold_f, "pred_nb", kelas_ada),
+                         "Random Forest": hitung(gold_f, "pred_rf", kelas_ada)}).T
+else:   # tanpa gold set pada filter: pakai gold set penuh, hanya untuk menentukan model pada grafik distribusi
+    perf = pd.DataFrame({"Naive Bayes": hitung(gold, "pred_nb"),
+                         "Random Forest": hitung(gold, "pred_rf")}).T
 terbaik = perf["F1-Score"].idxmax()
 lainnya = [m for m in MODEL if m != terbaik][0]
 kol_terbaik = "pred_rf" if terbaik == "Random Forest" else "pred_nb"
 
 st.markdown(CSS, unsafe_allow_html=True)
 
-# ---------- Header (filter dipindah ke kartu Distribusi sentimen) ----------
-tgl_min, tgl_maks = semua["tanggal"].min(), semua["tanggal"].max()
-daftar_versi = sorted(semua["versi_grup"].unique(), key=urut_versi)
-
+# ---------- Header ----------
 with st.container(key="hdr"):
     st.markdown('<div class="hd"><div class="logo">blu</div><div>'
                 '<div class="hd-t">Dashboard Perbandingan Naive Bayes vs Random Forest</div>'
                 '<div class="hd-s">blu by BCA Digital · Analisis sentimen ulasan aplikasi</div>'
                 '</div></div>', unsafe_allow_html=True)
 
-# ---------- Metode Terbaik (statis) ----------
-b_all, c_all, p_all, _, _ = mcnemar(gold)
-unggul_kelas = {m: [] for m in MODEL}
-for k in URUT:
-    uk = mcnemar(gold[gold["aktual"] == k])[3]
-    if uk in unggul_kelas:
-        unggul_kelas[uk].append(k)
-acc = {m: perf.loc[m, "Accuracy"] for m in MODEL}
-if p_all >= ALPHA:
-    butir1 = (f"Soal ketepatan menebak secara keseluruhan, keduanya hampir sama: Naive Bayes benar {pct(acc['Naive Bayes'])} "
-              f"dan Random Forest {pct(acc['Random Forest'])}. Selisihnya terlalu kecil untuk dianggap sebagai perbedaan nyata (uji McNemar, p = {p_txt(p_all)}).")
+# ---------- Ringkasan filter aktif ----------
+def tgl_txt(d):
+    return d.strftime("%d/%m/%Y")
+
+
+versi_txt = ", ".join(versi_pilih) if versi_pilih else "semua versi"
+st.markdown(
+    f'<div class="fi"><b>Filter aktif</b> · Tanggal {tgl_txt(tgl_awal)} – {tgl_txt(tgl_akhir)} · Versi: {versi_txt}'
+    f' · Ulasan sesuai filter: <b>{fmt(len(semua_f))}</b> dari {fmt(len(semua))}'
+    f' · Gold set sesuai filter: <b>{fmt(len(gold_f))}</b> dari {fmt(len(gold))}</div>',
+    unsafe_allow_html=True)
+peringatan = []
+if not rentang_ok:
+    peringatan.append("Tanggal awal tidak boleh setelah tanggal akhir.")
+elif not ada_gold:
+    peringatan.append("Tidak ada ulasan gold set pada filter ini, sehingga performa model tidak dapat dihitung.")
 else:
-    lebih = "Naive Bayes" if b_all > c_all else "Random Forest"
-    butir1 = (f"Soal ketepatan menebak secara keseluruhan, {lebih} lebih tepat: Naive Bayes benar {pct(acc['Naive Bayes'])} "
-              f"dan Random Forest {pct(acc['Random Forest'])} (uji McNemar, p = {p_txt(p_all)}).")
-bagian = [f"{m} lebih baik mengenali ulasan {' dan '.join(v)}" for m, v in unggul_kelas.items() if v]
-butir2 = ("Bedanya ada pada jenis ulasan (uji McNemar per kelas): " + ", sedangkan ".join(bagian) + ".") if bagian else \
-         "Tidak ada perbedaan nyata pada tiap jenis ulasan."
+    if len(gold_f) < N_MIN:
+        peringatan.append(f"Gold set pada filter ini hanya {len(gold_f)} ulasan (kurang dari {N_MIN}); "
+                          "hasil kurang stabil, tafsirkan dengan hati-hati.")
+    if kelas_hilang:
+        peringatan.append("Kelas " + ", ".join(kelas_hilang) + " tidak ada pada gold set filter ini, "
+                          "sehingga tidak dihitung dalam rata-rata makro.")
+for t in peringatan:
+    st.markdown(f'<div class="fw">{t}</div>', unsafe_allow_html=True)
 
+# ---------- Metode Terbaik (dinamis) ----------
 with st.container(key="card_metode"):
-    st.markdown(
-        '<div class="mt-top"><span class="mt-l">METODE TERBAIK</span>'
-        '<span class="mt-b">Berdasarkan F1-Score makro</span></div>'
-        f'<div class="mt-mid"><div class="mt-sp"></div><div class="mt-name">{terbaik}</div>'
-        f'<div class="mt-val">{pct(perf.loc[terbaik, "F1-Score"])}<small>F1-Score</small></div></div>'
-        f'<div class="mt-txt">{terbaik} lebih direkomendasikan karena paling seimbang dalam mengenali '
-        'ketiga jenis ulasan: positif, negatif, dan netral.</div>'
-        f'<div class="mt-li">• {butir1}</div><div class="mt-li">• {butir2}</div>'
-        '<div class="mt-ar">F1-Score adalah nilai gabungan yang menilai seberapa adil sebuah metode mengenali ketiga jenis ulasan. '
-        f'Makin tinggi, makin seimbang: {terbaik} {pct(perf.loc[terbaik, "F1-Score"])}, '
-        f'{lainnya} {pct(perf.loc[lainnya, "F1-Score"])}. '
-        'Uji McNemar adalah uji statistik untuk memastikan selisih antar metode bukan sekadar kebetulan.</div>'
-        f'<div class="mt-st">Statis · dihitung dari gold set (n = {len(gold)}), tidak berubah oleh filter</div>',
-        unsafe_allow_html=True)
+    if not ada_gold:
+        st.markdown('<div class="mt-l">METODE TERBAIK</div>'
+                    '<div class="mt-txt" style="margin-top:12px">Tidak ada gold set pada filter ini.</div>',
+                    unsafe_allow_html=True)
+    else:
+        b_all, c_all, p_all, _, _ = mcnemar(gold_f)
+        unggul_kelas = {m: [] for m in MODEL}
+        for k in URUT:
+            uk = mcnemar(gold_f[gold_f["aktual"] == k])[3]
+            if uk in unggul_kelas:
+                unggul_kelas[uk].append(k)
+        acc = {m: perf.loc[m, "Accuracy"] for m in MODEL}
+        if p_all >= ALPHA:
+            butir1 = (f"Soal ketepatan menebak secara keseluruhan, keduanya hampir sama: Naive Bayes benar {pct(acc['Naive Bayes'])} "
+                      f"dan Random Forest {pct(acc['Random Forest'])}. Selisihnya terlalu kecil untuk dianggap sebagai perbedaan nyata (uji McNemar, p = {p_txt(p_all)}).")
+        else:
+            lebih = "Naive Bayes" if b_all > c_all else "Random Forest"
+            butir1 = (f"Soal ketepatan menebak secara keseluruhan, {lebih} lebih tepat: Naive Bayes benar {pct(acc['Naive Bayes'])} "
+                      f"dan Random Forest {pct(acc['Random Forest'])} (uji McNemar, p = {p_txt(p_all)}).")
+        bagian = [f"{m} lebih baik mengenali ulasan {' dan '.join(v)}" for m, v in unggul_kelas.items() if v]
+        butir2 = ("Bedanya ada pada jenis ulasan (uji McNemar per kelas): " + ", sedangkan ".join(bagian) + ".") if bagian else \
+                 "Tidak ada perbedaan nyata pada tiap jenis ulasan."
+        st.markdown(
+            '<div class="mt-top"><span class="mt-l">METODE TERBAIK</span>'
+            '<span class="mt-b">Berdasarkan F1-Score makro</span></div>'
+            f'<div class="mt-mid"><div class="mt-sp"></div><div class="mt-name">{terbaik}</div>'
+            f'<div class="mt-val">{pct(perf.loc[terbaik, "F1-Score"])}<small>F1-Score</small></div></div>'
+            f'<div class="mt-txt">{terbaik} lebih direkomendasikan karena paling seimbang dalam mengenali '
+            'ketiga jenis ulasan: positif, negatif, dan netral.</div>'
+            f'<div class="mt-li">• {butir1}</div><div class="mt-li">• {butir2}</div>'
+            '<div class="mt-ar">F1-Score adalah nilai gabungan yang menilai seberapa adil sebuah metode mengenali ketiga jenis ulasan. '
+            f'Makin tinggi, makin seimbang: {terbaik} {pct(perf.loc[terbaik, "F1-Score"])}, '
+            f'{lainnya} {pct(perf.loc[lainnya, "F1-Score"])}. '
+            'Uji McNemar adalah uji statistik untuk memastikan selisih antar metode bukan sekadar kebetulan.</div>'
+            f'<div class="mt-st">Dinamis · dihitung dari gold set sesuai filter (n = {len(gold_f)} dari {len(gold)})</div>',
+            unsafe_allow_html=True)
 
 
-# ---------- Perbandingan performa + McNemar (statis) ----------
+# ---------- Perbandingan performa + McNemar (dinamis) ----------
 with st.container(key="card_perf"):
-    st.markdown(judul_kartu(
-        "Perbandingan performa model",
-        f"Dievaluasi pada gold set (n = {len(gold)}) · Precision, Recall, F1-Score: macro-average",
-        "Statis"), unsafe_allow_html=True)
-    kiri, kanan = st.columns([3, 2], gap="large")
-    kiri.markdown(html_perf(perf, terbaik) + html_mc_kelas(gold), unsafe_allow_html=True)
-    kanan.markdown(html_mc_total(gold), unsafe_allow_html=True)
+    if not ada_gold:
+        st.markdown(judul_kartu("Perbandingan performa model", "Tidak ada gold set pada filter ini", "Dinamis"),
+                    unsafe_allow_html=True)
+    else:
+        st.markdown(judul_kartu(
+            "Perbandingan performa model",
+            f"Dievaluasi pada gold set sesuai filter (n = {len(gold_f)}) · Precision, Recall, F1-Score: macro-average",
+            "Dinamis"), unsafe_allow_html=True)
+        kiri, kanan = st.columns([3, 2], gap="large")
+        kiri.markdown(html_perf(perf, terbaik) + html_mc_kelas(gold_f), unsafe_allow_html=True)
+        kanan.markdown(html_mc_total(gold_f), unsafe_allow_html=True)
 
-# ---------- Confusion matrix (statis) + Distribusi (dinamis, berisi filter) ----------
+# ---------- Confusion matrix (dinamis) + Distribusi sentimen (berisi filter) ----------
 c1, c2, c3 = st.columns(3, gap="medium")
 for kolom, model, kol, kunci in ((c1, "Naive Bayes", "pred_nb", "card_cm_nb"),
                                  (c2, "Random Forest", "pred_rf", "card_cm_rf")):
     with kolom:
         with st.container(key=kunci):
-            st.markdown(judul_kartu("Confusion matrix", f"{model} · n = {len(gold)}", "Statis",
-                                    pill=pct(perf.loc[model, "Accuracy"]),
-                                    kls=f"pill-{SINGKAT[model].lower()}"), unsafe_allow_html=True)
-            st.markdown(html_cm(gold, kol, model), unsafe_allow_html=True)
+            if not ada_gold:
+                st.markdown(judul_kartu("Confusion matrix", f"{model} · tidak ada gold set pada filter ini",
+                                        "Dinamis"), unsafe_allow_html=True)
+            else:
+                st.markdown(judul_kartu("Confusion matrix", f"{model} · n = {len(gold_f)}", "Dinamis",
+                                        pill=pct(perf.loc[model, "Accuracy"]),
+                                        kls=f"pill-{SINGKAT[model].lower()}"), unsafe_allow_html=True)
+                st.markdown(html_cm(gold_f, kol, model), unsafe_allow_html=True)
 
 with c3:
     with st.container(key="card_dist"):
@@ -357,40 +436,36 @@ with c3:
                     unsafe_allow_html=True)
         with st.container(key="flt"):
             f1, f2 = st.columns(2)
-            tgl_awal = f1.date_input("Dari tanggal", value=tgl_min, min_value=tgl_min, max_value=tgl_maks)
-            tgl_akhir = f2.date_input("Sampai tanggal", value=tgl_maks, min_value=tgl_min, max_value=tgl_maks)
-            versi_pilih = st.multiselect("Versi aplikasi (major.minor)", daftar_versi,
-                                         placeholder="Semua versi")
-        if tgl_awal > tgl_akhir:
+            f1.date_input("Dari tanggal", value=tgl_min, min_value=tgl_min, max_value=tgl_maks, key="f_awal")
+            f2.date_input("Sampai tanggal", value=tgl_maks, min_value=tgl_min, max_value=tgl_maks, key="f_akhir")
+            st.multiselect("Versi aplikasi (major.minor)", daftar_versi,
+                           placeholder="Semua versi", key="f_versi")
+        if not rentang_ok:
             st.warning("Tanggal awal tidak boleh setelah tanggal akhir.")
+        elif semua_f.empty:
+            st.warning("Tidak ada ulasan pada filter ini.")
         else:
-            dipilih = semua[(semua["tanggal"] >= tgl_awal) & (semua["tanggal"] <= tgl_akhir)]
-            if versi_pilih:
-                dipilih = dipilih[dipilih["versi_grup"].isin(versi_pilih)]
-            if dipilih.empty:
-                st.warning("Tidak ada ulasan pada filter ini.")
-            else:
-                total = len(dipilih)
-                hit = dipilih[kol_terbaik].value_counts().reindex(URUT, fill_value=0)
-                d = pd.DataFrame({"Sentimen": [k.capitalize() for k in URUT],
-                                  "Jumlah": [int(hit[k]) for k in URUT]})
-                d["Teks"] = d["Jumlah"].map(lambda x: pct(x / total))
-                st.markdown(f'<div class="dn">n = {fmt(total)} (sesuai filter)</div>',
-                            unsafe_allow_html=True)
-                dasar = alt.Chart(d).encode(
-                    x=alt.X("Sentimen:N", sort=list(d["Sentimen"]), title=None,
-                            axis=alt.Axis(labelAngle=0, labelFontSize=13, ticks=False, domain=False)),
-                    y=alt.Y("Jumlah:Q", axis=None,
-                            scale=alt.Scale(domain=[0, max(int(d["Jumlah"].max()) * 1.2, 1)])))
-                batang = dasar.mark_bar(size=56, cornerRadiusTopLeft=6, cornerRadiusTopRight=6).encode(
-                    color=alt.Color("Sentimen:N", legend=None,
-                                    scale=alt.Scale(domain=list(WARNA_DIST),
-                                                    range=list(WARNA_DIST.values()))))
-                label = dasar.mark_text(dy=-10, fontSize=14, fontWeight="bold",
-                                        color="#1a2333").encode(text="Teks:N")
-                grafik = ((batang + label).properties(height=230)
-                          .configure(background="#ffffff").configure_view(stroke=None))
-                st.altair_chart(grafik, theme=None, width="stretch")
-                st.markdown('<div class="dc">' + " · ".join(
-                    f"{k.capitalize()} {fmt(int(hit[k]))}" for k in URUT) + "</div>",
-                    unsafe_allow_html=True)
+            total = len(semua_f)
+            hit = semua_f[kol_terbaik].value_counts().reindex(URUT, fill_value=0)
+            d = pd.DataFrame({"Sentimen": [k.capitalize() for k in URUT],
+                              "Jumlah": [int(hit[k]) for k in URUT]})
+            d["Teks"] = d["Jumlah"].map(lambda x: pct(x / total))
+            st.markdown(f'<div class="dn">n = {fmt(total)} (sesuai filter)</div>',
+                        unsafe_allow_html=True)
+            dasar = alt.Chart(d).encode(
+                x=alt.X("Sentimen:N", sort=list(d["Sentimen"]), title=None,
+                        axis=alt.Axis(labelAngle=0, labelFontSize=13, ticks=False, domain=False)),
+                y=alt.Y("Jumlah:Q", axis=None,
+                        scale=alt.Scale(domain=[0, max(int(d["Jumlah"].max()) * 1.2, 1)])))
+            batang = dasar.mark_bar(size=56, cornerRadiusTopLeft=6, cornerRadiusTopRight=6).encode(
+                color=alt.Color("Sentimen:N", legend=None,
+                                scale=alt.Scale(domain=list(WARNA_DIST),
+                                                range=list(WARNA_DIST.values()))))
+            label = dasar.mark_text(dy=-10, fontSize=14, fontWeight="bold",
+                                    color="#1a2333").encode(text="Teks:N")
+            grafik = ((batang + label).properties(height=230)
+                      .configure(background="#ffffff").configure_view(stroke=None))
+            st.altair_chart(grafik, theme=None, width="stretch")
+            st.markdown('<div class="dc">' + " · ".join(
+                f"{k.capitalize()} {fmt(int(hit[k]))}" for k in URUT) + "</div>",
+                unsafe_allow_html=True)
