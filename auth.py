@@ -6,7 +6,9 @@ from datetime import datetime
 
 import bcrypt
 import streamlit as st
-from sqlalchemy import Column, DateTime, Integer, MetaData, String, Table, func, insert, select
+import pandas as pd
+from sqlalchemy import (Column, DateTime, Integer, MetaData, String, Table, delete, func, insert, select,
+                        update)
 from sqlalchemy.exc import IntegrityError
 
 meta = MetaData()
@@ -90,11 +92,133 @@ def keluar():
 
 
 def wajib_admin():
-    """Dipanggil di awal setiap halaman admin; menghentikan halaman bila bukan admin."""
+    """Dipanggil di awal setiap halaman admin; menghentikan halaman bila bukan admin.
+    Peran diperiksa ulang ke database, sehingga akun yang diturunkan atau dihapus kehilangan akses
+    tanpa menunggu keluar."""
     u = pengguna()
     if not u or u["role"] != "admin":
         st.error("Halaman ini hanya untuk admin.")
         st.stop()
+    from db import get_engine
+    with get_engine().connect() as c:
+        peran = c.execute(select(users.c.role).where(users.c.username == u["username"])).scalar()
+    if peran is None:
+        keluar()
+        st.rerun()
+    if peran != "admin":
+        st.session_state["auth_user"] = {"username": u["username"], "role": peran}
+        st.rerun()
+
+
+# ============================== Pengelolaan akun (khusus admin) ==============================
+def daftar_akun(engine):
+    d = pd.read_sql(select(users.c.username, users.c.role, users.c.dibuat).order_by(users.c.dibuat), engine)
+    return d
+
+
+def _jumlah_admin(c):
+    return c.execute(select(func.count()).select_from(users).where(users.c.role == "admin")).scalar()
+
+
+def ubah_peran(engine, username, peran_baru, oleh):
+    if username == oleh:
+        return False, "Peran akun sendiri tidak dapat diubah."
+    if peran_baru not in ("admin", "user"):
+        return False, "Peran tidak dikenal."
+    with engine.begin() as c:
+        peran = c.execute(select(users.c.role).where(users.c.username == username)).scalar()
+        if peran is None:
+            return False, "Akun tidak ditemukan."
+        if peran == "admin" and peran_baru != "admin" and _jumlah_admin(c) <= 1:
+            return False, "Harus tersisa minimal satu admin."
+        c.execute(update(users).where(users.c.username == username).values(role=peran_baru))
+    return True, f"Peran {username} diubah menjadi {'Admin' if peran_baru == 'admin' else 'Pengguna'}."
+
+
+def hapus_akun(engine, username, oleh):
+    if username == oleh:
+        return False, "Akun sendiri tidak dapat dihapus."
+    with engine.begin() as c:
+        peran = c.execute(select(users.c.role).where(users.c.username == username)).scalar()
+        if peran is None:
+            return False, "Akun tidak ditemukan."
+        if peran == "admin" and _jumlah_admin(c) <= 1:
+            return False, "Harus tersisa minimal satu admin."
+        c.execute(delete(users).where(users.c.username == username))
+    return True, f"Akun {username} dihapus."
+
+
+def atur_ulang_sandi(engine, username, sandi, ulang):
+    if not (PASS_MIN <= len(sandi) <= PASS_MAKS) or len(sandi.encode("utf-8")) > 72:
+        return False, f"Kata sandi {PASS_MIN}-{PASS_MAKS} karakter."
+    if sandi != ulang:
+        return False, "Kata sandi dan pengulangannya tidak sama."
+    with engine.begin() as c:
+        hasil = c.execute(update(users).where(users.c.username == username).values(password_hash=hash_pw(sandi)))
+    if hasil.rowcount == 0:
+        return False, "Akun tidak ditemukan."
+    return True, f"Kata sandi {username} diganti."
+
+
+def tampil_kelola_akun(engine):
+    """Isi tab Akun di halaman admin."""
+    saya = pengguna()["username"]
+    if "pesan_akun" in st.session_state:
+        st.success(st.session_state.pop("pesan_akun"))
+    d = daftar_akun(engine)
+    st.subheader("Daftar akun")
+    tampil = pd.DataFrame({
+        "Username": d["username"],
+        "Peran": d["role"].map({"admin": "Admin", "user": "Pengguna"}),
+        "Dibuat": (pd.to_datetime(d["dibuat"]) + pd.Timedelta(hours=7)).dt.strftime("%d/%m/%Y %H:%M WIB")})
+    st.dataframe(tampil, hide_index=True, use_container_width=True)
+    st.caption(f"{len(d)} akun, {int((d['role'] == 'admin').sum())} di antaranya admin. "
+               "Pendaftaran publik selalu berperan Pengguna; hanya admin yang dapat menaikkan peran.")
+
+    lain = [u for u in d["username"] if u != saya]
+
+    st.subheader("Ubah peran")
+    if lain:
+        with st.form("form_peran"):
+            akun = st.selectbox("Akun", lain)
+            peran = st.radio("Peran baru", ["Pengguna", "Admin"], horizontal=True)
+            if st.form_submit_button("Simpan peran"):
+                ok, pesan = ubah_peran(engine, akun, "admin" if peran == "Admin" else "user", saya)
+                if ok:
+                    st.session_state["pesan_akun"] = pesan
+                    st.rerun()
+                st.error(pesan)
+    else:
+        st.caption("Belum ada akun lain.")
+
+    st.subheader("Atur ulang kata sandi")
+    with st.form("form_sandi", clear_on_submit=True):
+        akun2 = st.selectbox("Akun", d["username"].tolist(), key="sandi_akun")
+        s1 = st.text_input("Kata sandi baru", type="password")
+        s2 = st.text_input("Ulangi kata sandi baru", type="password")
+        if st.form_submit_button("Ganti kata sandi"):
+            ok, pesan = atur_ulang_sandi(engine, akun2, s1, s2)
+            if ok:
+                st.session_state["pesan_akun"] = pesan
+                st.rerun()
+            st.error(pesan)
+
+    st.subheader("Hapus akun")
+    if lain:
+        with st.form("form_hapus"):
+            akun3 = st.selectbox("Akun", lain, key="hapus_akun")
+            yakin = st.checkbox("Ya, hapus akun ini secara permanen")
+            if st.form_submit_button("Hapus akun"):
+                if not yakin:
+                    st.error("Centang kotak konfirmasi terlebih dahulu.")
+                else:
+                    ok, pesan = hapus_akun(engine, akun3, saya)
+                    if ok:
+                        st.session_state["pesan_akun"] = pesan
+                        st.rerun()
+                    st.error(pesan)
+    else:
+        st.caption("Belum ada akun lain.")
 
 
 def tampil_login(engine):
