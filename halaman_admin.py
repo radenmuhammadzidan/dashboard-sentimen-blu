@@ -1,8 +1,11 @@
+import io
 from datetime import timedelta
 from pathlib import Path
 
 import pandas as pd
 import streamlit as st
+from scipy.stats import binomtest, chi2
+from sklearn.metrics import accuracy_score, precision_recall_fscore_support
 
 import auth
 import dw
@@ -13,6 +16,8 @@ auth.wajib_admin()
 
 BASE = Path(__file__).parent
 engine = get_engine()
+URUT = ["positif", "netral", "negatif"]
+ALPHA = 0.05
 
 
 def angka(n):
@@ -91,6 +96,64 @@ def proses_berkas(berkas):
     st.session_state.pop("stg_kunci", None)
     st.session_state["pesan"] = ("Berkas berhasil diproses. Data di dashboard belum berubah; lanjutkan dengan "
                                  "menentukan gold set di bawah.")
+    return True
+
+
+def persen(x):
+    return f"{x * 100:.1f}%".replace(".", ",")
+
+
+def evaluasi(hasil, gold):
+    """Metrik NB dan RF pada gold set (rata-rata makro atas kelas yang ada) dan uji McNemar."""
+    g = hasil.merge(gold, on="id")
+    kelas = [k for k in URUT if k in set(g["label_manual"])]
+    metrik = {}
+    for nama, kol in (("Naive Bayes", "pred_nb"), ("Random Forest", "pred_rf")):
+        p, r, f, _ = precision_recall_fscore_support(g["label_manual"], g[kol], labels=kelas,
+                                                     average="macro", zero_division=0)
+        metrik[nama] = {"Accuracy": accuracy_score(g["label_manual"], g[kol]),
+                        "Precision": p, "Recall": r, "F1-Score": f}
+    nb_ok = g["label_manual"] == g["pred_nb"]
+    rf_ok = g["label_manual"] == g["pred_rf"]
+    b, c = int((nb_ok & ~rf_ok).sum()), int((~nb_ok & rf_ok).sum())
+    n = b + c
+    stat = None
+    if n == 0:
+        pval = 1.0
+    elif n < 25:
+        pval = binomtest(min(b, c), n, 0.5).pvalue
+    else:
+        stat = (abs(b - c) - 1) ** 2 / n
+        pval = chi2.sf(stat, 1)
+    if pval >= ALPHA:
+        kesimpulan = "Tidak berbeda signifikan"
+    else:
+        kesimpulan = "Naive Bayes lebih baik" if b > c else "Random Forest lebih baik"
+    return {"metrik": metrik, "b": b, "c": c, "stat": stat, "p": pval, "kesimpulan": kesimpulan, "n": len(g)}
+
+
+def latih_dan_terapkan(data, gold):
+    """Latih NB + RF, prediksi semua ulasan, evaluasi, lalu timpa data dashboard (satu transaksi)."""
+    with st.status("Melatih model dan menerapkan ke dashboard...", expanded=True) as status:
+        try:
+            st.write("1/3 Pelatihan model (TF-IDF, Naive Bayes, Random Forest) dan prediksi semua ulasan")
+            hasil, meta = P.latih_prediksi(data, lambda nama: st.write(f"· {nama}"))
+            st.write("2/3 Evaluasi pada gold set dan uji McNemar")
+            ev = evaluasi(hasil, gold)
+            st.write("3/3 Memuat ke data warehouse (data lama ditimpa dalam satu transaksi)")
+            ringkas = dw.terapkan(engine, hasil, gold)
+            dw.hapus_staging(engine)
+            st.cache_data.clear()   # dashboard memuat ulang data baru
+            status.update(label="Selesai: dashboard sudah diperbarui", state="complete", expanded=False)
+        except Exception as e:
+            status.update(label="Gagal; data di dashboard tidak berubah", state="error")
+            st.error(f"Proses dibatalkan: {e}")
+            return False
+    for k in ("stg_kunci", "stg_df", "cadangan", "cadangan_diunduh"):
+        st.session_state.pop(k, None)
+    st.session_state["hasil_terapan"] = {"ev": ev, "ringkas": ringkas, "fitur": meta["fitur"],
+                                         "nb": hasil["pred_nb"].value_counts().to_dict(),
+                                         "rf": hasil["pred_rf"].value_counts().to_dict()}
     return True
 
 
@@ -190,7 +253,76 @@ with tab_proses:
 
 # ============================== TAB 2 & 3 ==============================
 with tab_gold:
-    st.info("Unggah gold set berlabel, pelatihan model, evaluasi, dan penerapan ke dashboard akan "
-            "ditambahkan di langkah berikutnya.")
+    hasil = st.session_state.get("hasil_terapan")
+    if hasil:
+        ev, rg = hasil["ev"], hasil["ringkas"]
+        st.success(f"Data di dashboard sudah diperbarui: {angka(rg['ulasan'])} ulasan, "
+                   f"{angka(rg['gold'])} di antaranya gold set. Buka menu Dashboard untuk melihat hasilnya.")
+        st.subheader("Ringkasan evaluasi pada gold set")
+        tabel = pd.DataFrame({n: {k: persen(v) for k, v in m.items()} for n, m in ev["metrik"].items()}).T
+        st.dataframe(tabel, use_container_width=True)
+        stat = "tidak dihitung (uji eksak)" if ev["stat"] is None else f"{ev['stat']:.3f}".replace(".", ",")
+        st.caption(f"Uji McNemar: b = {ev['b']} (NB benar, RF salah), c = {ev['c']} (NB salah, RF benar), "
+                   f"chi-square {stat}, p = {ev['p']:.4f}".replace(".", ",") + f". Kesimpulan: {ev['kesimpulan']} "
+                   f"(α = 0,05). Jumlah fitur TF-IDF: {angka(hasil['fitur'])}.")
+        if st.button("Tutup ringkasan"):
+            st.session_state.pop("hasil_terapan")
+            st.rerun()
+        st.divider()
+
+    info_s = dw.info_staging(engine)
+    if not info_s or not info_s["n_gold"]:
+        st.info("Belum ada gold set yang menunggu dilabel. Selesaikan tab 1: proses berkas lalu tetapkan gold set.")
+    else:
+        stg = muat_data_sementara(info_s)
+        gold_ids = stg.loc[stg["gold_dipilih"], "id"].tolist()
+        st.subheader("Langkah 4. Unggah gold set yang sudah dilabel")
+        st.caption(f"Gunakan lembar yang diunduh dari tab 1 ({angka(len(gold_ids))} ulasan) dengan kolom "
+                   "label_manual terisi penuh.")
+        lembar = st.file_uploader("Gold set berlabel", type=["xlsx"], key="up_gold", label_visibility="collapsed")
+        gold = None
+        if lembar is not None:
+            try:
+                gold = P.baca_gold(io.BytesIO(lembar.getvalue()), gold_ids)
+            except ValueError as e:
+                st.error(str(e))
+        if gold is not None:
+            s = gold["label_manual"].value_counts()
+            st.success(f"Gold set valid: {angka(len(gold))} ulasan. Positif {angka(s.get('positif', 0))}, "
+                       f"netral {angka(s.get('netral', 0))}, negatif {angka(s.get('negatif', 0))}.")
+
+            st.subheader("Langkah 5. Latih model dan terapkan ke dashboard")
+            aktif2 = dw.ringkasan_aktif(engine)
+            siap = True
+            if aktif2:
+                st.warning(f"Data di dashboard saat ini ({angka(aktif2['n'])} ulasan) akan DITIMPA oleh data baru "
+                           f"({angka(info_s['n_akhir'])} ulasan). Unduh cadangannya terlebih dahulu.")
+                if st.button("Siapkan cadangan data saat ini"):
+                    with st.spinner("Menyiapkan cadangan..."):
+                        st.session_state["cadangan"] = dw.ekspor_cadangan(engine).to_csv(
+                            index=False).encode("utf-8-sig")
+                    st.session_state.pop("cadangan_diunduh", None)
+                if "cadangan" in st.session_state:
+                    st.download_button(
+                        "Unduh cadangan (.csv)", data=st.session_state["cadangan"],
+                        file_name="cadangan_data_dashboard.csv", mime="text/csv",
+                        on_click=lambda: st.session_state.update(cadangan_diunduh=True))
+                yakin = st.checkbox("Saya mengerti data di dashboard akan ditimpa")
+                siap = yakin and st.session_state.get("cadangan_diunduh", False)
+                if not siap:
+                    st.caption("Tombol aktif setelah cadangan diunduh dan kotak persetujuan dicentang.")
+            if st.button("Latih model dan terapkan", type="primary", disabled=not siap):
+                if latih_dan_terapkan(stg, gold):
+                    st.rerun()
+
+        with st.expander("Buang data sementara"):
+            st.caption("Menghapus hasil pemrosesan dan gold set yang belum diterapkan. Data di dashboard "
+                       "tidak terpengaruh.")
+            buang = st.checkbox("Ya, buang data sementara")
+            if st.button("Buang", disabled=not buang):
+                dw.hapus_staging(engine)
+                for k in ("stg_kunci", "stg_df", "cadangan", "cadangan_diunduh"):
+                    st.session_state.pop(k, None)
+                st.rerun()
 with tab_akun:
     st.info("Pengelolaan akun akan ditambahkan di langkah berikutnya.")
