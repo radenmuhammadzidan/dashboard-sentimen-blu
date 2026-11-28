@@ -30,8 +30,8 @@ header[data-testid="stHeader"] {background: transparent;}
 [class*="st-key-card_"] {background:#fff; border-radius:18px; padding:22px 24px; box-shadow:0 2px 10px rgba(20,40,90,.07);}
 .st-key-card_metode {background:#0b3a7a !important; color:#fff;}
 .st-key-card_cm_nb, .st-key-card_cm_rf, .st-key-card_dist {min-height: 600px;}
-.st-key-flt {background: linear-gradient(90deg,#1565d8,#2f86ec); border-radius:14px; padding:14px 16px; margin-bottom:14px;}
-.st-key-flt label p, .st-key-flt [data-testid="stWidgetLabel"] p {color:#fff !important; font-size:.78rem; font-weight:600;}
+.st-key-flt {background:#fff; border-radius:14px; padding:14px 18px 6px; box-shadow:0 2px 10px rgba(20,40,90,.07);}
+.st-key-flt label p, .st-key-flt [data-testid="stWidgetLabel"] p {color:#3b4a60 !important; font-size:.78rem; font-weight:600;}
 .st-key-flt [data-baseweb="tag"] {background:#dce8fb !important;}
 .st-key-flt [data-baseweb="tag"] span {color:#1565d8 !important;}
 
@@ -275,8 +275,8 @@ semua = muat_semua()
 tgl_min, tgl_maks = semua["tanggal"].min(), semua["tanggal"].max()
 daftar_versi = sorted(semua["versi_grup"].unique(), key=urut_versi)
 
-# Nilai filter dibaca dari session_state. Widget-nya ada di kartu "Distribusi sentimen"
-# (paling bawah), tetapi semua kartu di atasnya ikut berubah karena memakai nilai ini.
+# Nilai filter dibaca dari session_state. Widget-nya ada tepat di bawah header dan
+# nilainya dipakai oleh semua kartu.
 tgl_awal = st.session_state.get("f_awal") or tgl_min
 tgl_akhir = st.session_state.get("f_akhir") or tgl_maks
 versi_pilih = st.session_state.get("f_versi") or []
@@ -324,6 +324,14 @@ with st.container(key="hdr"):
                 '<div class="hd-t">Dashboard Perbandingan Naive Bayes vs Random Forest</div>'
                 '<div class="hd-s">blu by BCA Digital · Analisis sentimen ulasan aplikasi</div>'
                 '</div></div>', unsafe_allow_html=True)
+
+# ---------- Filter (di bawah header, berlaku untuk semua kartu) ----------
+with st.container(key="flt"):
+    f1, f2, f3 = st.columns([1, 1, 2], gap="medium")
+    f1.date_input("Dari tanggal", value=tgl_min, min_value=tgl_min, max_value=tgl_maks, key="f_awal")
+    f2.date_input("Sampai tanggal", value=tgl_maks, min_value=tgl_min, max_value=tgl_maks, key="f_akhir")
+    f3.multiselect("Versi aplikasi (major.minor)", daftar_versi,
+                   placeholder="Semua versi", key="f_versi")
 
 # ---------- Ringkasan filter aktif ----------
 def tgl_txt(d):
@@ -418,7 +426,7 @@ with st.container(key="card_perf"):
         kiri.markdown(html_perf(perf, terbaik) + html_mc_kelas(gold_f), unsafe_allow_html=True)
         kanan.markdown(html_mc_total(gold_f), unsafe_allow_html=True)
 
-# ---------- Confusion matrix (dinamis) + Distribusi sentimen (berisi filter) ----------
+# ---------- Confusion matrix (dinamis) + Distribusi sentimen ----------
 c1, c2, c3 = st.columns(3, gap="medium")
 for kolom, model, kol, kunci in ((c1, "Naive Bayes", "pred_nb", "card_cm_nb"),
                                  (c2, "Random Forest", "pred_rf", "card_cm_rf")):
@@ -440,12 +448,6 @@ with c3:
                                 f"Komposisi ulasan (prediksi {model_dist}, model terbaik pada seluruh data)",
                                 "Dinamis"),
                     unsafe_allow_html=True)
-        with st.container(key="flt"):
-            f1, f2 = st.columns(2)
-            f1.date_input("Dari tanggal", value=tgl_min, min_value=tgl_min, max_value=tgl_maks, key="f_awal")
-            f2.date_input("Sampai tanggal", value=tgl_maks, min_value=tgl_min, max_value=tgl_maks, key="f_akhir")
-            st.multiselect("Versi aplikasi (major.minor)", daftar_versi,
-                           placeholder="Semua versi", key="f_versi")
         if not rentang_ok:
             st.warning("Tanggal awal tidak boleh setelah tanggal akhir.")
         elif semua_f.empty:
