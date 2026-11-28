@@ -325,4 +325,4 @@ with tab_gold:
                     st.session_state.pop(k, None)
                 st.rerun()
 with tab_akun:
-    st.info("Pengelolaan akun akan ditambahkan di langkah berikutnya.")
+    auth.tampil_kelola_akun(engine)
