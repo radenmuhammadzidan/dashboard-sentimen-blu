@@ -26,21 +26,20 @@ header[data-testid="stHeader"] {background: transparent;}
 [data-testid="stMarkdownContainer"] tr {border:none !important; background:transparent !important;}
 [data-testid="stMarkdownContainer"] th, [data-testid="stMarkdownContainer"] td {border:none !important; background:transparent;}
 
-.st-key-hdr {background: linear-gradient(90deg,#1565d8,#2f86ec); border-radius: 18px; padding: 22px 28px;}
+.st-key-hdr {background: linear-gradient(90deg,#1565d8,#2f86ec); border-radius: 18px; padding: 14px 28px;}
 [class*="st-key-card_"] {background:#fff; border-radius:18px; padding:22px 24px; box-shadow:0 2px 10px rgba(20,40,90,.07);}
 .st-key-card_metode {background:#0b3a7a !important; color:#fff;}
 .st-key-card_cm_nb, .st-key-card_cm_rf, .st-key-card_dist {min-height: 600px;}
-.st-key-flt {padding:0;}
-.st-key-flt label p, .st-key-flt [data-testid="stWidgetLabel"] p {color:#fff !important; font-size:.78rem; font-weight:600;}
-.st-key-flt [data-baseweb="tag"] {background:#dce8fb !important;}
-.st-key-flt [data-baseweb="tag"] span {color:#1565d8 !important;}
+.st-key-hdr label p, .st-key-hdr [data-testid="stWidgetLabel"] p {color:#fff !important; font-size:.78rem; font-weight:600;}
+.st-key-hdr [data-baseweb="tag"] {background:#dce8fb !important;}
+.st-key-hdr [data-baseweb="tag"] span {color:#1565d8 !important;}
 
 .fi {background:#fff; border-radius:12px; padding:10px 18px; font-size:.82rem; color:#3b4a60; box-shadow:0 2px 10px rgba(20,40,90,.07); line-height:1.6;}
 .fi b {color:#1565d8;}
 .fw {background:#fff1d6; color:#9a6200; border-radius:12px; padding:9px 18px; font-size:.82rem; font-weight:600; margin-top:8px;}
 .hd {display:flex; align-items:center; gap:14px;}
 .logo {background:#fff; color:#1565d8; font-weight:800; border-radius:12px; padding:8px 16px; font-size:1.4rem; letter-spacing:-.02em;}
-.hd-t {color:#fff; font-size:1.5rem; font-weight:700; line-height:1.2;}
+.hd-t {color:#fff; font-size:1.25rem; font-weight:700; line-height:1.2;}
 .hd-s {color:#d6e6ff; font-size:.85rem;}
 
 .ct {display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:14px;}
@@ -320,18 +319,15 @@ st.markdown(CSS, unsafe_allow_html=True)
 
 # ---------- Header (judul di kiri, filter di kanan; filter berlaku untuk semua kartu) ----------
 with st.container(key="hdr"):
-    kiri_h, kanan_h = st.columns([6, 4], gap="large", vertical_alignment="center")
-    kiri_h.markdown('<div class="hd"><div class="logo">blu</div><div>'
-                    '<div class="hd-t">Dashboard Perbandingan Naive Bayes vs Random Forest</div>'
-                    '<div class="hd-s">blu by BCA Digital · Analisis sentimen ulasan aplikasi</div>'
-                    '</div></div>', unsafe_allow_html=True)
-    with kanan_h:
-        with st.container(key="flt"):
-            f1, f2 = st.columns(2)
-            f1.date_input("Dari tanggal", value=tgl_min, min_value=tgl_min, max_value=tgl_maks, key="f_awal")
-            f2.date_input("Sampai tanggal", value=tgl_maks, min_value=tgl_min, max_value=tgl_maks, key="f_akhir")
-            st.multiselect("Versi aplikasi (major.minor)", daftar_versi,
-                           placeholder="Semua versi", key="f_versi")
+    kol_j, kol_a, kol_b, kol_v = st.columns([6, 2, 2, 3], gap="medium", vertical_alignment="center")
+    kol_j.markdown('<div class="hd"><div class="logo">blu</div><div>'
+                   '<div class="hd-t">Dashboard Perbandingan Naive Bayes vs Random Forest</div>'
+                   '<div class="hd-s">blu by BCA Digital · Analisis sentimen ulasan aplikasi</div>'
+                   '</div></div>', unsafe_allow_html=True)
+    kol_a.date_input("Dari tanggal", value=tgl_min, min_value=tgl_min, max_value=tgl_maks, key="f_awal")
+    kol_b.date_input("Sampai tanggal", value=tgl_maks, min_value=tgl_min, max_value=tgl_maks, key="f_akhir")
+    kol_v.multiselect("Versi aplikasi (major.minor)", daftar_versi,
+                      placeholder="Semua versi", key="f_versi")
 
 # ---------- Ringkasan filter aktif ----------
 def tgl_txt(d):
