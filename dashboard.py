@@ -19,6 +19,12 @@ def siapkan_sekali():
 
 siapkan_sekali()
 
+
+@st.cache_data
+def ada_data():
+    return dw.ringkasan_aktif(get_engine()) is not None   # cache dibersihkan otomatis saat data diperbarui
+
+
 akun = auth.pengguna()
 if akun is None:
     auth.tampil_login(get_engine())
@@ -37,4 +43,8 @@ with st.sidebar:
         auth.keluar()
         st.rerun()
 
-nav.run()
+if nav.title == "Dashboard" and not ada_data():
+    st.info("Belum ada data di dashboard. " + ("Unggah dan proses data di menu Admin."
+            if akun["role"] == "admin" else "Silakan hubungi admin."))
+else:
+    nav.run()
