@@ -1,6 +1,9 @@
+from pathlib import Path
+
 import streamlit as st
 
 import auth
+import dw
 from db import get_engine
 
 st.set_page_config(page_title="Dashboard NB vs RF", layout="wide")
@@ -8,7 +11,9 @@ st.set_page_config(page_title="Dashboard NB vs RF", layout="wide")
 
 @st.cache_resource
 def siapkan_sekali():
-    auth.siapkan(get_engine())   # buat tabel users + admin pertama (dari Secrets) bila belum ada
+    mesin = get_engine()
+    auth.siapkan(mesin)   # buat tabel users + admin pertama (dari Secrets) bila belum ada
+    dw.siapkan(mesin, Path(__file__).parent / "kamus" / "stem_cache.csv")   # tabel DW, kamus stem, data sementara
     return True
 
 
